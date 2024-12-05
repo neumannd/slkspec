@@ -15,6 +15,7 @@ from queue import Queue
 from typing import (
     IO,
     Any,
+    AnyStr,
     Dict,
     List,
     Literal,
@@ -29,7 +30,8 @@ from fsspec.spec import AbstractFileSystem
 import pyslk
 
 logger = logging.getLogger("slkspec")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
+
 
 MAX_RETRIES = 2
 MAX_PARALLEL_RECALLS = 4
@@ -48,24 +50,20 @@ class SLKFile(io.IOBase):
         Source path of the file that should be retrieved.
     local_file: str
         Destination path of the downloaded file.
-    slk_cache: str | Path
-        Destination of the temporary storage. This directory is used to
-        retrieve data from tape.
     override: bool, default: False
         Override existing files
-    touch: bool, default: False
+    touch: bool, default: True
         Update existing files on the temporary storage to prevent them
-        from being deleted. // not necessary as they are read.
+        from being deleted.
     mode: str, default: rb
         Specify the mode in which the files are opened
 
         'r'       open for reading (default)
         'b'       binary mode (default)
         't'       text mode
-    file_permissions: int, default: 0o644
-        Permission when creating files.
-    dir_permissions: int, default: 0o3775
-        Permission when creating directories.   **kwargs:
+    file_permissions: int, default 0o3777
+        Permission when creating directories and files.
+    **kwargs:
         Additional keyword arguments passed to the open file descriptor method.
 
     Example
@@ -89,20 +87,17 @@ class SLKFile(io.IOBase):
     in any kind of write mode."""
 
     def __init__(
-            self,
-            url: str,
-            local_file: str,
-            slk_cache: Union[str, Path],
-            *,
-            override: bool = True,
-            mode: str = "rb",
-            touch: bool = False,
-            file_permissions: int = 0o644,
-            dir_permissions: int = 0o3775,
-            delay: int = 2,
-            _lock: threading.Lock = _retrieval_lock,
-            _file_queue: Queue[Tuple[str, str]] = FileQueue,
-            **kwargs: Any,
+        self,
+        url: str,
+        local_file: str,
+        *,
+        override: bool = True,
+        mode: str = "rb",
+        touch: bool = True,
+        file_permissions: int = 0o3777,
+        _lock: threading.Lock = _retrieval_lock,
+        _file_queue: Queue[Tuple[str, str]] = FileQueue,
+        **kwargs: Any,
     ):
         if not set(mode) & set("r"):  # The mode must have a r
             raise NotImplementedError(self.write_msg)
@@ -110,10 +105,8 @@ class SLKFile(io.IOBase):
             kwargs.setdefault("encoding", "utf-8")
         self._file = str(Path(local_file).expanduser().absolute())
         self._url = str(url)
-        self.slk_cache = Path(slk_cache)
         self.touch = touch
         self.file_permissions = file_permissions
-        self.dir_permissions = dir_permissions
         self._order_num = 0
         self._file_obj: Optional[IO[Any]] = None
         self._lock = _lock
@@ -123,9 +116,8 @@ class SLKFile(io.IOBase):
         self.error = "strict"
         self.encoding = kwargs.get("encoding")
         self.write_through = False
-        self.delay = delay
         self._file_queue = _file_queue
-        #        print(self._file)
+        print(self._file)
         with _lock:
             if not Path(self._file).exists() or override:
                 self._file_queue.put((self._url, str(Path(self._file).parent)))
@@ -153,8 +145,6 @@ class SLKFile(io.IOBase):
         logger.debug("retrieval routine initializing")
         retrieve_files_corrected: list[tuple[str, str]] = list()
         for inp_file, out_dir in retrieve_files:
-            self._mkdirs(output_dir)
-            # this `mkdir` indirectly sets proper access permissions for this folder
             out_file: Path = os.path.join(os.path.expanduser(out_dir), Path(inp_file).name)
             if os.path.exists(out_file):
                 details_inp_file = pyslk.list_clone_file(inp_file, print_timestamps_as_seconds_since_1970=True)
@@ -198,10 +188,9 @@ class SLKFile(io.IOBase):
             len(retrieve_files) - len(retrieve_files_corrected)
         )
         # tape grouping
-        file_tape_grouping: list[dict] = pyslk.group_files_by_tape(
-            [inp_file for inp_file, out_dir in retrieve_files_corrected])
+        file_tape_grouping: list[dict] = pyslk.group_files_by_tape([inp_file for inp_file, out_dir in retrieve_files_corrected])
         # get list of all tape barcodes (volume_ids)
-        tapes = [tape_group["barcode"] for tape_group in file_tape_grouping if tape_group.get("id", -1) > 0]
+        tapes = [tape_group["barcode"] for tape_group in file_tape_grouping if tape_group.get("id", -1) > 0 ]
         all_tapes_done = len(tapes) == 0
         # get list of file split amongst multiple tapes
         for tape_group in file_tape_grouping:
@@ -299,7 +288,7 @@ class SLKFile(io.IOBase):
                         #   DO NOT RESTART if MAX_RETRIES_RECALL of retries have been reached
                         # log warning message; but do nothing else
                         msg: str = (f"Job {job_id} has failed (tape: {tape_barcode}). "
-                                    + f"{4 - len(tape_job_mapping.get(tape_barcode, list()))} of "
+                                    + f"{4-len(tape_job_mapping.get(tape_barcode, list()))} of "
                                     + f"{MAX_RETRIES_RECALL} retries left")
                         logger.warning(msg)
                         tapes_active.remove(tape_barcode)
@@ -361,7 +350,7 @@ class SLKFile(io.IOBase):
                         #   DO NOT RESTART if MAX_RETRIES_RECALL of retries have been reached
                         # log warning message; but do nothing else
                         msg: str = (f"Job {job_id} has failed (file id: {file_id}). "
-                                    + f"{4 - len(multi_tape_file_job_mapping.get(file_id, list()))} of "
+                                    + f"{4-len(multi_tape_file_job_mapping.get(file_id, list()))} of "
                                     + f"{MAX_RETRIES_RECALL} retries left")
                         logger.warning(msg)
                         job_ids_to_be_removed.add(job_id)
@@ -450,10 +439,10 @@ class SLKFile(io.IOBase):
 
             # iterate over files stored on multiple tapes each
             multi_tape_files_available = [file_id
-                                          for file_id in file_ids_multiple_tapes
-                                          if (file_id not in multi_tape_files_success
-                                              and file_id not in multi_tape_files_failed
-                                              and file_id not in multi_tape_files_active)]
+                               for file_id in file_ids_multiple_tapes
+                               if (file_id not in multi_tape_files_success
+                                   and file_id not in multi_tape_files_failed
+                                   and file_id not in multi_tape_files_active)]
             logger.debug("Number of files for which recalls need to be submitted: %i", len(multi_tape_files_available))
             logger.debug("Number of running jobs: %i", len(job_tape_mapping) + len(job_multi_tape_file_mapping))
             logger.debug("Maximum allowed number of jobs: %i", MAX_PARALLEL_RECALLS)
@@ -478,7 +467,7 @@ class SLKFile(io.IOBase):
                         tmp_tapes.append(tape_barcode)
                     if len(tmp_tapes) < 2:
                         msg: str = (f"File {file_id} is in list of split files but it seems to be stored on "
-                                    + f"{len(tmp_tapes)} tape.")
+                               + f"{len(tmp_tapes)} tape.")
                         logger.error(msg)
                         raise pyslk.PySlkException(msg)
                     logger.debug(f"File {file_id} on tapes: {', '.join(tmp_tapes)}")
@@ -521,7 +510,6 @@ class SLKFile(io.IOBase):
                         multi_tape_files_active.add(file_id)
 
             logger.debug("Recall function ended")
-
         # +==========================================================
         # | end _start_recalls()
         # +==========================================================
@@ -535,8 +523,7 @@ class SLKFile(io.IOBase):
         _start_recalls()
         recall_timer = time.time()
         # we do not generally remove files_recall_failed from to_be_retrieved because some files of failed recalls might have been recalled
-        while len(
-                [file_path for file_path in to_be_retrieved_files if file_path not in files_recall_failed.keys()]) > 0:
+        while len([file_path for file_path in to_be_retrieved_files if file_path not in files_recall_failed.keys()]) > 0:
             iterations += 1
             retrieve_timer = time.time()
             logger.info(
@@ -544,8 +531,7 @@ class SLKFile(io.IOBase):
                 iterations,
                 len(to_be_retrieved_files),
                 len(job_tape_mapping) + len(job_multi_tape_file_mapping),
-                sum([len(tape_file_mapping[tape]) for tape in job_tape_mapping.values()]) + len(
-                    job_multi_tape_file_mapping)
+                sum([len(tape_file_mapping[tape]) for tape in job_tape_mapping.values()]) + len(job_multi_tape_file_mapping)
             )
             for inp_file, out_dir in retrieve_files_corrected:
                 # skip files which do not need to be retrieved anymore
@@ -563,15 +549,15 @@ class SLKFile(io.IOBase):
                 """
                 {'SKIPPED': {'SKIPPED_TARGET_EXISTS': ['/arch/bm0146/k204221/iow/INDEX.txt']}, 
                     'FILES': {'/arch/bm0146/k204221/iow/INDEX.txt': '/home/k204221/tmp/INDEX.txt'}}
-
+    
                 # dry run
                 {'ENVISAGED': {'ENVISAGED': ['/arch/bm0146/k204221/iow/INDEX.txt']},
                     'FILES': {'/arch/bm0146/k204221/iow/INDEX.txt': '/home/k204221/tmp/abcdef2/INDEX.txt'}}
-
+    
                 # after successful retrieval
                 {'ENVISAGED': {'ENVISAGED': []}, 'FILES': {'/arch/bm0146/k204221/iow/INDEX.txt': 
                     '/home/k204221/tmp/INDEX.txt'}, 'SUCCESS': {'SUCCESS': ['/arch/bm0146/k204221/iow/INDEX.txt']}}
-
+    
                 {'FAILED': {'FAILED_NOT_CACHED': ['/arch/bm0146/k204221/iow/iow_data5_001.tar']}, 
                     'FILES': {'/arch/bm0146/k204221/iow/iow_data5_001.tar': '/home/k204221/tmp/iow_data5_001.tar'}}
                 """
@@ -608,16 +594,14 @@ class SLKFile(io.IOBase):
                             continue
                     # check if file was skipped
                     if "SKIPPED" in output_retrieve:
-                        logger.debug(
-                            f"File {inp_file} was not retrieve because it does already exist in {out_dir}. Skip.")
+                        logger.debug(f"File {inp_file} was not retrieve because it does already exist in {out_dir}. Skip.")
                         to_be_retrieved_files.remove(inp_file)
                         continue
                     # check if file was successfully retrieved
                     if "SUCCESS" in output_retrieve:
                         logger.debug(f"File {inp_file} was successfully retrieved to {out_dir}.")
                         logger.debug("Adjusting file permissions")
-                        Path(os.path.join(os.path.expanduser(out_dir), Path(inp_file).name)).chmod(
-                            self.file_permissions)
+                        Path(os.path.join(os.path.expanduser(out_dir), Path(inp_file).name)).chmod(self.file_permissions)
                         to_be_retrieved_files.remove(inp_file)
                         continue
                 logger.error(f"Retrieval check for file {inp_file} yielded unexpected output. Ignore.")
@@ -650,7 +634,6 @@ class SLKFile(io.IOBase):
             logger.error(f"files, missing for other reasons:\n  {tmp_str}")
 
     def _cache_files(self) -> None:
-        time.sleep(self.delay)
         with self._lock:
             items = []
             if self._file_queue.qsize() > 0:
@@ -686,26 +669,6 @@ class SLKFile(io.IOBase):
             self._cache_files()
         return self._file_obj.seek(target)  # type: ignore
 
-    def _mkdirs(self, path: Union[str, Path]) -> None:
-        rp = os.path.realpath(path)
-        if os.access(rp, os.F_OK):
-            if not os.access(rp, os.W_OK):
-                raise PermissionError(
-                    f"Cannot write to directory, {rp}, needed for downloading data. Probably, you lack access privileges."
-                )
-            return
-        components = Path(rp).parts[1:]
-        for i in range(len(components)):
-            subpath = Path("/", *components[: i + 1])
-            if not os.access(subpath, os.F_OK):
-                try:
-                    os.mkdir(subpath)
-                except PermissionError as e:
-                    raise PermissionError(
-                        f"Cannot create or access directory, {e.filename}, needed for downloading data."
-                    )
-                os.chmod(subpath, self.dir_permissions)
-
     @staticmethod
     def readable() -> Literal[True]:
         """Compatibility method."""
@@ -721,7 +684,7 @@ class SLKFile(io.IOBase):
         """Compatibility method."""
         return True
 
-    def read(self, size: int = -1) -> Any:
+    def read(self, size: int = -1) -> AnyStr:
         """The the content of a file-stream.
 
         size: int, default: -1
@@ -764,34 +727,28 @@ class SLKFileSystem(AbstractFileSystem):
         retrieve data from tape.
     block_size: int, default: None
          Some indication of buffering - this is a value in bytes
-    file_permissions: int, default: 0o644
-        Permission when creating files.
-    dir_permissions: int, default: 0o3775
-        Permission when creating directories.
-
+    file_permissions: int, default: 0o3777
+        Permission when creating directories and files.
     override: bool, default: False
         Override existing files
-    touch: bool, default: False
+    touch: bool, default: True
         Update existing files on the temporary storage to prevent them
-        from being deleted. // not necessary if they are read.
+        from being deleted.
     **storage_options:
         Additional options passed to the AbstractFileSystem class.
     """
 
     protocol = "slk"
-    local_file = True
     sep = "/"
 
     def __init__(
-            self,
-            block_size: Optional[int] = None,
-            slk_cache: Optional[Union[str, Path]] = None,
-            file_permissions: int = 0o644,
-            dir_permissions: int = 0o3775,
-            touch: bool = False,
-            delay: int = 2,
-            override: bool = False,
-            **storage_options: Any,
+        self,
+        block_size: Optional[int] = None,
+        slk_cache: Optional[Union[str, Path]] = None,
+        file_permissions: int = 0o3777,
+        touch: bool = True,
+        override: bool = False,
+        **storage_options: Any,
     ):
         super().__init__(
             block_size=block_size,
@@ -799,12 +756,7 @@ class SLKFileSystem(AbstractFileSystem):
             loop=None,
             **storage_options,
         )
-        slk_options = storage_options.get("slk", {})
-        slk_cache = (
-                slk_options.get("slk_cache", None)
-                or slk_cache
-                or os.environ.get("SLK_CACHE")
-        )
+        slk_cache = slk_cache or os.environ.get("SLK_CACHE")
         if not slk_cache:
             slk_cache = f"/scratch/{getuser()[0]}/{getuser()}"
             warnings.warn(
@@ -817,24 +769,22 @@ class SLKFileSystem(AbstractFileSystem):
         self.touch = touch
         self.slk_cache = Path(slk_cache)
         self.override = override
-        self.delay = delay
         self.file_permissions = file_permissions
-        self.dir_permissions = dir_permissions
 
     @overload
     def ls(
-            self, path: Union[str, Path], detail: Literal[True], **kwargs: Any
+        self, path: Union[str, Path], detail: Literal[True], **kwargs: Any
     ) -> List[FileInfo]:
         ...
 
     @overload
     def ls(
-            self, path: Union[str, Path], detail: Literal[False], **kwargs: Any
+        self, path: Union[str, Path], detail: Literal[False], **kwargs: Any
     ) -> List[str]:
         ...
 
     def ls(
-            self, path: Union[str, Path], detail: bool = True, **kwargs: Any
+        self, path: Union[str, Path], detail: bool = True, **kwargs: Any
     ) -> Union[List[FileInfo], List[str]]:
         """List objects at path.
 
@@ -871,25 +821,22 @@ class SLKFileSystem(AbstractFileSystem):
         return filelist.filename.tolist()
 
     def _open(
-            self,
-            path: str | Path,
-            mode: str = "rb",
-            block_size: Optional[int] = None,
-            autocommit: bool = True,
-            cache_options: Optional[Dict[str, Any]] = None,
-            **kwargs: Any,
+        self,
+        path: str | Path,
+        mode: str = "rb",
+        block_size: Optional[int] = None,
+        autocommit: bool = True,
+        cache_options: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> SLKFile:
         path = Path(self._strip_protocol(path))
         local_path = self.slk_cache.joinpath(*path.parts[1:])
         return SLKFile(
             str(path),
             str(local_path),
-            self.slk_cache,
             mode=mode,
             override=self.override,
             touch=self.touch,
-            delay=self.delay,
             encoding=kwargs.get("encoding"),
             file_permissions=self.file_permissions,
-            dir_permissions=self.dir_permissions,
         )
