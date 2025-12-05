@@ -38,11 +38,11 @@ if logger.level == 0:
     else:
         logger.setLevel(logging.root.level)
 
-
-MAX_RETRIES = 2
-MAX_PARALLEL_RECALLS = 3
-MAX_RETRIES_RECALL = 3
+# default delay for the queue to collect resources: 5 seconds
+default_queue_delay = 5
+# define queue
 FileQueue: Queue[Tuple[str, str]] = Queue(maxsize=-1)
+# other definitions
 FileInfo = TypedDict("FileInfo", {"name": str, "size": int, "type": str})
 TapeGroup = TypedDict(
     "TapeGroup",
@@ -121,7 +121,7 @@ class SLKFile(io.IOBase):
         touch: bool = False,
         file_permissions: int = 0o644,
         dir_permissions: int = 0o3775,
-        delay: int = 5,
+        delay: int = default_queue_delay,
         _lock: threading.Lock = _retrieval_lock,
         _file_queue: Queue[Tuple[str, str]] = FileQueue,
         **kwargs: Any,
@@ -372,7 +372,7 @@ class SLKFileSystem(AbstractFileSystem):
         file_permissions: int = 0o644,
         dir_permissions: int = 0o3775,
         touch: bool = False,
-        delay: int = 2,
+        delay: int = default_queue_delay,
         override: bool = False,
         **storage_options: Any,
     ):
