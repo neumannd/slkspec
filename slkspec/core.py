@@ -118,7 +118,7 @@ class SLKFile(io.IOBase):
         touch: bool = False,
         file_permissions: int = 0o644,
         dir_permissions: int = 0o3775,
-        delay: int = 2,
+        delay: int = 5,
         _lock: threading.Lock = _retrieval_lock,
         _file_queue: Queue[Tuple[str, str]] = FileQueue,
         **kwargs: Any,
