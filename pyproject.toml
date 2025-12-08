@@ -71,6 +71,9 @@ ignore_missing_imports = true
 [tool.mypy-pyslk]
 ignore_missing_imports = true
 
+[tool.mypy-hsm]
+ignore_missing_imports = true
+
 [tool.setuptools.packages]
 find = {}
 
