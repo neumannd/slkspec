@@ -919,7 +919,7 @@ class SLKRecall:
     def _check_tapes_of_split_file_available(
         self, file_id: int, tmp_tapes: list[str]
     ) -> list[bool]:
-        tmp_tapes_available: List[bool]
+        tmp_tapes_available: List[bool] = list()
         msg: str
         for tape in tmp_tapes:
             # go through tape list and start new recalls
