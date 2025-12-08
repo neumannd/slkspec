@@ -831,11 +831,9 @@ def _write_file_lists(
     )
     tmp_str: str
     logger.debug(
-        "Start writing file lists if one of these values is larger than 0: "
-        + "#'files retrieval reasonable' is "
-        + f"{len(slk_retrieval.files_retrieval_reasonable)}; #'files recall "
-        + f"failed' is {len(slk_recall.files_recall_failed.keys())}; #'files "
-        + "retrieval failed' is "
+        "Start writing file lists if one of these values is larger than 0: #'files "
+        + f"retrieval reasonable' is {len(files_not_retrieved_yet)}; #'files recall "
+        + f"failed' is {len(files_recall_failed)}; #'files retrieval failed' is "
         + f"{len(slk_retrieval.files_retrieval_failed.keys())}"
     )
     if (
