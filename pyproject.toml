@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "fsspec implementation for StrongLink tape archive"
 readme = "README.md"
 license = {text = "MIT License"}
-authors = [{name = "Hauke Schulz", email = "haschulz@uw.edu"}]
+authors = [{name = "Hauke Schulz", email = "has@dmi.dk"}]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
