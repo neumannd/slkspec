@@ -30,7 +30,11 @@ import pyslk
 from fsspec.spec import AbstractFileSystem
 
 logger = logging.getLogger("slkspec")
-logger.setLevel(logging.INFO)
+if logger.level == 0:
+    if logging.root.level == 0:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.root.level)
 
 MAX_RETRIES = 2
 MAX_PARALLEL_RECALLS = 3
@@ -114,7 +118,7 @@ class SLKFile(io.IOBase):
         touch: bool = False,
         file_permissions: int = 0o644,
         dir_permissions: int = 0o3775,
-        delay: int = 2,
+        delay: int = 5,
         _lock: threading.Lock = _retrieval_lock,
         _file_queue: Queue[Tuple[str, str]] = FileQueue,
         **kwargs: Any,
@@ -915,7 +919,7 @@ class SLKRecall:
     def _check_tapes_of_split_file_available(
         self, file_id: int, tmp_tapes: list[str]
     ) -> list[bool]:
-        tmp_tapes_available: List[bool]
+        tmp_tapes_available: List[bool] = list()
         msg: str
         for tape in tmp_tapes:
             # go through tape list and start new recalls
@@ -1230,6 +1234,14 @@ def _write_file_lists(
         and file_path not in slk_retrieval.files_retrieval_failed.keys()
     ]
     tmp_str: str
+    logger.debug(
+        "Start writing file lists if one of these values is larger than 0: "
+        + "#'files retrieval reasonable' is "
+        + f"{len(slk_retrieval.files_retrieval_reasonable)}; #'files recall "
+        + f"failed' is {len(slk_recall.files_recall_failed.keys())}; #'files "
+        + "retrieval failed' is "
+        + f"{len(slk_retrieval.files_retrieval_failed.keys())}"
+    )
     if (
         len(slk_retrieval.files_retrieval_reasonable) > 0
         or len(slk_recall.files_recall_failed.keys()) > 0
@@ -1246,12 +1258,20 @@ def _write_file_lists(
             + f"in directory '{str(slk_cache)}'."
         )
         if len(slk_recall.files_recall_failed) > 0:
+            logger.debug(
+                "Write list of files which recall failed into "
+                + f"{os.path.join(slk_cache, file_failed_recall)}"
+            )
             tmp_str = "\n  ".join(slk_recall.files_recall_failed)
             logger.error(f"files, recall failed:\n  {tmp_str}")
             with open(os.path.join(slk_cache, file_failed_recall), "w") as f:
                 for file_path, reason in slk_recall.files_recall_failed.items():
                     f.write(f"{file_path}: {reason}\n")
         if len(slk_retrieval.files_retrieval_failed) > 0:
+            logger.debug(
+                "Write list of files which retrieval failed into "
+                + f"{os.path.join(slk_cache, file_failed_retrieve)}"
+            )
             tmp_str = "\n  ".join(slk_retrieval.files_retrieval_failed)
             logger.error(f"files, retrieval failed (recall successful):\n  {tmp_str}")
             with open(os.path.join(slk_cache, file_failed_retrieve), "w") as f:
@@ -1261,6 +1281,10 @@ def _write_file_lists(
                 ) in slk_retrieval.files_retrieval_failed.items():
                     f.write(f"{file_path}: {reason}\n")
         if len(missing_files) > 0:
+            logger.debug(
+                "Write list of files which were not retrieved for other "
+                + f"reasons to {os.path.join(slk_cache, file_failed_other)}"
+            )
             tmp_str = "\n  ".join(missing_files)
             logger.error(f"files, missing for other reasons:\n  {tmp_str}")
             with open(os.path.join(slk_cache, file_failed_other), "w") as f:
